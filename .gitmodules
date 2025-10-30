@@ -1,0 +1,3 @@
+[submodule "thirdparty/Grounded-Segment-Anything"]
+	path = thirdparty/Grounded-Segment-Anything
+	url = https://github.com/IDEA-Research/Grounded-Segment-Anything
