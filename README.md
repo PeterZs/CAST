@@ -1,7 +1,7 @@
 ## Unofficial Implementation of CAST: Component-Aligned 3D Scene Reconstruction from an RGB Image
 This REPO demonstrates an unofficial simplified implementation of SIGGRAPH 2025 Best Paper Nominate [CAST: Component-Aligned 3D Scene Reconstruction from an RGB Image](https://arxiv.org/abs/2502.12894). 
 
-The pipeline is modular and can easily benefit from the progress of each module(e.g. image inpainting / mesh generation). To simplify the implementation, many modules of the system are based on existing **SERVERLEESS API** (e.g.Replicate/Qwen/Kontext/Tripo3D), making it easily deployed anywhere.
+The pipeline is modular and can easily benefit from the progress of each module(e.g. image inpainting / mesh generation). To simplify the implementation, many modules of the system are based on existing **Serverless API** (e.g.Replicate/Qwen/Kontext/Tripo3D), making it easily deployed anywhere.
 
 ### Demo Results with Qwen Inpainter and TRELLIS
 ![Examples](./assets//teaser.png)
