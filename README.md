@@ -3,8 +3,13 @@ This REPO demonstrates an unofficial simplified implementation of SIGGRAPH 2025 
 
 The pipeline is modular and can easily benefit from the progress of each module(e.g. image inpainting / mesh generation). To simplify the implementation, many modules of the system are based on existing **Serverless API** (e.g.Replicate/Qwen/Kontext/Tripo3D), making it easily deployed anywhere.
 
-### Demo Results with Qwen Inpainter and TRELLIS
-![Examples](./assets//teaser.png)
+### CHANGELOG 
+* 2025.11.03: Instead of ICP or DR, use **Render-and-Compare + OrientAnything** for rotation estimation, and use PyTorch based **least-square chamfer loss** for scale+translation optimization.
+* 2025.10.31: Update more test cases, switch to **locally deployed Grounded-SAM**.
+
+### Demo Results
+![Examples](./assets/teaser.png)
+![Tripo Demo](./assets/cast_demo_tripo.png)
 
 ### Disclaimer 
 This repo is a **proof-of-concept and work-in-progress**. Since I don't want to (nor have the computational resources) to train the occlusion-aware generative model and the iterative registration approach, its performance **is NEVER** expected to approach the performance of the original paper. The results shown above are **NOT CHERRY-PICKED** and have some obvious artifacts. I am working to improving the results.
@@ -12,24 +17,22 @@ This repo is a **proof-of-concept and work-in-progress**. Since I don't want to 
 ### Algorithmic Workflow
 ![workflow](./assets/cast_demo_workflow.png)
 
-Note: You could try Tripo3D for higher quality 3D models 
-
 
 ### Differences with the Paper 
-1. Instead of using florence2 to first detect out objects in the image and then use Grounded-SAM to generate masks, here we use **[IDEA's RAM model](https://replicate.com/fishwowater/ram-grounded-sam-maskfixed)** to predict boxes/tags/masks all at once.
+1. Instead of using florence2 to first detect out objects in the image and then use Grounded-SAM to generate masks, here we use **[IDEA's RAM model](https://replicate.com/fishwowater/ram-grounded-sam-maskfixed)** to first predict boxes, then use qwen-vl to filter out invalid detections, finally using Grounded-SAM to generate segmentation. (It's **important** to filter out invalid detections before segmentation, otherwise the mask will be unclean).
 2. The original paper puts a lot of efforts in training an occlusion-aware 3D generative model to support the mesh generation of seriously occluded objects in the image, here we use **a simplified and training-free scheme**: use Flux-Kontext / Qwen-Image to inpaint the occluded image, and then use off-the-shelf 3D generators like Tripo3D and TRELLIS to generate 3D models.
-3. The original paper implements a point cloud conditioned model and iterative approach to register the 6D pose of an object. Here as we don't have the computational power, again we resort to **ICP(Iterative Closest Point) or Differentiable Rendering** to optimize the pose/scale of generated objects.
+3. The original paper implements a point cloud conditioned model and iterative approach to register the 6D pose of an object. Here we first use **render-and-compare + OrientAnything** to estimate the object rotation, then optimizing the scale+translation with PyTorch least sqaured chamfer loss.
 
 Detailed differences are summarized in the following table:
 
 | Modules | Original Paper | This Repo |
 | --- | --- | --- |
 | Detection and Caption | Florence2    |  [RAM-Grounded-SAM](https://replicate.com/fishwowater/ram-grounded-sam-maskfixed) |
-| Segmentation          | Grounded-SAM |  [RAM-Grounded-SAM](https://replicate.com/fishwowater/ram-grounded-sam-maskfixed) | 
+| Segmentation          | Grounded-SAM |  [Grounded-SAM](https://github.com/IDEA-Research/Grounded-Segment-Anything) | 
 | Detection Filtering   |  GPT-4       |  [Qwen-VL](https://qwen3.org/vl/) | 
 | Depth Estimation & PointCloud | MoGev1 |  [MoGev2](https://github.com/microsoft/MoGe/) | 
 | Mesh Generation       | Occlusion-Aware self-trained 3D Generative model| [Kontext](https://replicate.com/black-forest-labs/flux-kontext-dev)/[Qwen](https://www.aliyun.com/product/tongyi) + [Tripo3D](https://www.tripo3d.ai)/[TRELLIS](https://replicate.com/firtoz/trellis) | 
-| Pose Registration     | Occlusion-Aaware self-trained 3D Generative model | [ICP](https://www.open3d.org/docs/release/tutorial/pipelines/icp_registration.html#ICP-registration) / [DR](https://github.com/NVlabs/nvdiffrast/) | 
+| Pose Registration     | Occlusion-Aaware self-trained 3D Generative model | Least-Squared Fit + Render-and-Compare
 | Physical Post-Processing | Scene Graph Guided SDF | TO BE DONE |
 ---
 
@@ -74,7 +77,6 @@ cp .env.example .env
 ``` shell 
 # check available parameters 
 python -m cast.cli -h 
-# usage: cli.py [-h] (--image IMAGE | --batch BATCH) [--output OUTPUT] [--no-intermediates] [--run-id RUN_ID] s[--no-resume] [--num-max-objects NUM_MAX_OBJECTS] [--validate-only] [--visualize] [--enable-generation] [--generation-threshold {no_occlusion,some_occlusion,severe_occlusion}] [--discard-threshold {no_occlusion,some_occlusion,severe_occlusion}] [--generation-provider {replicate,qwen}] [--mesh-provider {tripo3d,trellis}] [--mesh-base-url MESH_BASE_URL] [--pose-estimation-backend {icp,pytorch}] [--debug]
 
 # inference example
 python -m cast.cli -i assets/inputs/doll2.png --output outputs --enable-generation --pose-estimation-backend pytorch --generation-provider qwen --mesh-provider trellis
@@ -83,13 +85,14 @@ python -m cast.cli -i assets/inputs/doll2.png --output outputs --enable-generati
 
 ### TODO 
 - [x] Further experiment with the differentiable rendering 
-- [ ] Implement the scene-graph and SDF guided object pose estimation. 
 - [x] Test More Use Cases
+- [ ] Clean up the legacy code branches and unused modules.  
+- [ ] Implement the scene-graph and SDF guided object pose estimation. 
 
 
 ### Comparison with Existing Works
->*The advantage of CAST implementation is its modular design, and can benefit from progress of each module in the community (until, I think, the end-to-end methods is strong enough one day).*
-Basically there are two roads to get a component-level reconstruction(generation) from a RGB image: End-to-End or procedural pipelines. 
+>*The advantage of CAST is its modular design, and can benefit from progress of each module in the community (until, I think, the end-to-end paradigm is strong enough one day).*
+Basically there are two roadmaps to get a component-level reconstruction(generation) from a RGB image: End-to-End or procedural pipelines. 
 
 1. [MIDI-3D](https://github.com/VAST-AI-Research/MIDI-3D) is a promising approach, but it's trained on 3D-Front and the generalization to outdoor scene / objects NOT guaranteed, besides the 6D pose of generated objects often not aligns well with the image.
 2. [PartCrafter](https://github.com/wgsxm/PartCrafter) / [PartPacker](https://github.com/NVlabs/PartPacker) is basically object-centric, although PartCrafter has a model trained on 3DFront, an indoor scene dataset.
@@ -97,9 +100,18 @@ Basically there are two roads to get a component-level reconstruction(generation
 4. [ReconViaGen](https://github.com/GAP-LAB-CUHK-SZ/ReconViaGen) is object-centric and requires multi-view images as the input, which is impossible for wide-angle or large scale scenes.
 5. *[CUPID](https://github.com/cupid3d/Cupid) shows fantastic generation results of compositional scenes. **It's more end-to-end and more elegant**. This implementation may benefit from the image-aligned model from CUPID.
 
+### Experiments / Trials
+* Segmentation Module 
+  * RAM for both detection & segmentation -> **inaccurate masks** 
+  * RAM + Qwen-VL filtering + Grounded-SAM -> **better**
+* Pose Registration module
+  * [Differentiable Rendering - REPARO](https://github.com/VincentHancoder/REPARO) -> **NOT working**
+  * Render-and-Compare + Qwen-VL -> **NOT working**
+  * Render-and-Compare + CLIP-based view selection -> **NOT working**
+  * Render-and-Compare + Orient Anything -> **work**
 
 ### Citation
-If you finds this implementation helpful, please consider to cite the original paper and this repo. Thank you very much :)
+If you find this implementation helpful, please consider to cite the original paper and this repo. Thank you very much :)
 ```
 @article{2025CAST,
   title={CAST: Component-Aligned 3D Scene Reconstruction from an RGB Image},

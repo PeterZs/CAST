@@ -27,7 +27,8 @@ class PyTorchPoseOptimizer(nn.Module):
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
-        
+        # load the predefined rotation matrices 
+        self.rot_matrices = torch.from_numpy(np.load("./assets/init_rot_matrices.npy")).float().to(self.device)
         print(f"PyTorch pose optimizer using device: {self.device}")
     
     def chamfer_distance_3d(self, source_points: torch.Tensor, target_points: torch.Tensor,
@@ -38,6 +39,8 @@ class PyTorchPoseOptimizer(nn.Module):
                            normal_weight: float = 0.1) -> torch.Tensor:
         """
         Compute bi-directional chamfer distance between two point clouds with optional RGB colors
+        Notice that here source is the mesh and target is the scene 
+        forward weight constrain that each point in the mesh should have a good support in the scene, here it should be smaller 
         
         Args:
             source_points: Source point cloud (N, 3)
@@ -121,8 +124,37 @@ class PyTorchPoseOptimizer(nn.Module):
             6D rotation representation (6,)
         """
         # Take first two columns of rotation matrix
-        rotation_6d = rotation_matrix[:, :2].flatten()
+        rotation_6d = rotation_matrix[:2, :].flatten()
         return rotation_6d
+
+    
+    def sample_random_rotation(self) -> torch.Tensor:
+        """
+        Sample a uniform random rotation matrix using quaternion method
+        Based on Shoemake's algorithm for uniform random rotations in SO(3)
+        
+        Returns:
+            Random rotation matrix (3, 3)
+        """
+        # Sample 3 uniform random numbers
+        u1 = torch.rand(1, device=self.device).item()
+        u2 = torch.rand(1, device=self.device).item()
+        u3 = torch.rand(1, device=self.device).item()
+        
+        # Convert to uniform quaternion
+        q0 = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
+        q1 = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
+        q2 = np.sqrt(u1) * np.sin(2 * np.pi * u3)
+        q3 = np.sqrt(u1) * np.cos(2 * np.pi * u3)
+        
+        # Convert quaternion to rotation matrix
+        rotation_matrix = np.array([
+            [1 - 2*(q2**2 + q3**2), 2*(q1*q2 - q0*q3), 2*(q1*q3 + q0*q2)],
+            [2*(q1*q2 + q0*q3), 1 - 2*(q1**2 + q3**2), 2*(q2*q3 - q0*q1)],
+            [2*(q1*q3 - q0*q2), 2*(q2*q3 + q0*q1), 1 - 2*(q1**2 + q2**2)]
+        ])
+        
+        return torch.tensor(rotation_matrix, dtype=torch.float32, device=self.device)
     
     def apply_transformation(self, points: torch.Tensor, translation: torch.Tensor, 
                            rotation_matrix: torch.Tensor, scale: torch.Tensor, normals: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
@@ -165,6 +197,7 @@ class PyTorchPoseOptimizer(nn.Module):
                      xyz_weight: float = 1.0, color_weight: float = 0.1,
                      forward_weight: float = 1.0, backward_weight: float = 1.0, rot_reg_weight: float = 0.05, 
                      learning_rate: float = 0.001, num_iterations: int = 2500,
+                     fix_rotation: bool = False,
                      verbose: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
         """
         Optimize pose parameters using chamfer distance with 6D rotation representation
@@ -183,8 +216,10 @@ class PyTorchPoseOptimizer(nn.Module):
             color_weight: Weight for RGB color component
             forward_weight: Weight for forward direction
             backward_weight: Weight for backward direction
+            rot_reg_weight: Weight for rotation regularization loss
             learning_rate: Learning rate for optimization
             num_iterations: Number of optimization iterations
+            fix_rotation: If True, keep rotation fixed during optimization
             verbose: Whether to print progress
             
         Returns:
@@ -201,7 +236,7 @@ class PyTorchPoseOptimizer(nn.Module):
             # Initialize as identity rotation in 6D representation
             rotation_6d = torch.tensor([1., 0., 0., 0., 1., 0.], device=self.device, requires_grad=True)
         else:
-            rotation_6d = self.matrix_to_rotation_6d(initial_rotation).requires_grad_(True)
+            rotation_6d = self.matrix_to_rotation_6d(initial_rotation).requires_grad_(not fix_rotation)
         
         # Initialize scale parameter
         if initial_scale is None:
@@ -209,13 +244,19 @@ class PyTorchPoseOptimizer(nn.Module):
             scale = torch.ones(1, device=self.device, requires_grad=True)
         else:
             if initial_scale.dim() == 0:
-                scale = torch.tensor([initial_scale, initial_scale, initial_scale], 
-                                   device=self.device, requires_grad=True)
+                # scale = torch.tensor([initial_scale, initial_scale, initial_scale], 
+                                #    device=self.device, requires_grad=True)
+                scale = torch.tensor(initial_scale[0], device=self.device, requires_grad=True)
             else:
-                scale = initial_scale.clone().detach().requires_grad_(True)
+                # scale = initial_scale.clone().detach().requires_grad_(True)
+                scale = torch.tensor(initial_scale[0], device=self.device, requires_grad=True)
         
-        # Setup optimizer
-        optimizer = optim.Adam([translation, rotation_6d, scale], lr=learning_rate)
+        # Setup optimizer - only include rotation if not fixed
+        if fix_rotation:
+            optimizer = optim.Adam([translation, scale], lr=learning_rate)
+        else:
+            optimizer = optim.Adam([translation, rotation_6d, scale], lr=learning_rate)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.95)
         
         best_loss = float('inf')
         best_translation = translation.clone()
@@ -223,7 +264,7 @@ class PyTorchPoseOptimizer(nn.Module):
         best_scale = scale.clone()
         
         if verbose:
-            print(f"  Starting optimization with {num_iterations} iterations...")
+            print(f"  Starting optimization with {num_iterations} iterations, from rotation 6d {rotation_6d.detach().cpu().numpy()}...")
         
         for iteration in range(num_iterations):
             optimizer.zero_grad()
@@ -249,9 +290,10 @@ class PyTorchPoseOptimizer(nn.Module):
             loss.backward()
             
             # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_([translation, rotation_6d, scale], max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_([translation, rotation_6d, scale], max_norm=5.0)
             
             optimizer.step()
+            scheduler.step()
             
             # Track best result
             if loss_chamfer.item() < best_loss:
@@ -281,10 +323,12 @@ class PyTorchPoseOptimizer(nn.Module):
                               mesh_normals:Optional[np.ndarray] = None,  scene_normals: Optional[np.ndarray] = None, 
                              mesh_colors: Optional[np.ndarray] = None, scene_colors: Optional[np.ndarray] = None,
                              use_colors: bool = True, xyz_weight: float = 1.0, color_weight: float = 0.1,
-                             forward_weight: float = 1.0, backward_weight: float = 1.0, rot_reg_weight: float = 0.05, 
+                             forward_weight: float = 0.8, backward_weight: float = 1.2, rot_reg_weight: float = 0.5, 
                              learning_rate: float = 0.01, num_iterations: int = 1000,
                              initial_transform: Optional[np.ndarray] = None,
-                             downsample_target: int = 20000,
+                             downsample_target: int = 15000,
+                             num_rotation_samples: int = 4,
+                             fix_rotation: bool = False,
                              verbose: bool = True) -> Tuple[np.ndarray, float, bool]:
         """
         Register mesh points to scene points using PyTorch optimization
@@ -301,14 +345,21 @@ class PyTorchPoseOptimizer(nn.Module):
             color_weight: Weight for RGB color component
             forward_weight: Weight for forward direction (source to target)
             backward_weight: Weight for backward direction (target to source)
+            rot_reg_weight: Weight for rotation regularization loss
             learning_rate: Learning rate for optimization
             num_iterations: Number of optimization iterations
             initial_transform: Initial transformation matrix (4, 4), optional
+            downsample_target: Maximum number of points after downsampling
+            num_rotation_samples: Number of random rotation samples when initial rotation not provided
+            fix_rotation: If True, keep rotation fixed during optimization
             verbose: Whether to print progress
             
         Returns:
             Tuple of (transformation_matrix, final_loss, success)
         """
+        if num_rotation_samples > len(self.rot_matrices):
+            raise ValueError(f"Number of rotation samples ({num_rotation_samples}) is greater than the number of predefined rotation matrices ({len(self.rot_matrices)})")
+        
         if len(mesh_points) == 0 or len(scene_points) == 0:
             if verbose:
                 print("Warning: Empty point clouds for registration")
@@ -374,17 +425,73 @@ class PyTorchPoseOptimizer(nn.Module):
             initial_scale = torch.tensor(scale, dtype=torch.float32, device=self.device)
         
         try:
-            # Optimize pose using PyTorch
-            final_translation, final_rotation, final_scale, final_loss = self.optimize_pose(
-                source_points, target_points,
-                source_normals, target_normals,
-                source_colors, target_colors,
-                initial_translation, initial_rotation, initial_scale,
-                xyz_weight, color_weight,
-                forward_weight, backward_weight, rot_reg_weight,
-                learning_rate, num_iterations,
-                verbose
-            )
+            # If initial rotation is not provided, use multi-start optimization with random rotations
+            # Skip multi-start if rotation is fixed
+            if initial_rotation is None and num_rotation_samples > 0 and not fix_rotation:
+                if verbose:
+                    print(f"  No initial rotation provided. Sampling {num_rotation_samples} random rotations...")
+                
+                best_final_loss = float('inf')
+                best_final_translation = None
+                best_final_rotation = None
+                best_final_scale = None
+                
+                for sample_idx in range(num_rotation_samples + 1):
+                    if sample_idx < num_rotation_samples:
+                        # Sample random rotation
+                        # sampled_rotation = self.sample_random_rotation()
+                        sampled_rotation = self.rot_matrices[sample_idx]
+                    else:
+                        # in this pass we try to mainly fit the chamfer loss 
+                        sampled_rotation = None
+                        rot_reg_weight = 0.01
+                    
+                    if verbose:
+                        print(f"\n  Optimization attempt {sample_idx + 1}/{num_rotation_samples+1}:")
+                    
+                    # Optimize pose with this random initial rotation
+                    final_translation, final_rotation, final_scale, final_loss = self.optimize_pose(
+                        source_points, target_points,
+                        source_normals, target_normals,
+                        source_colors, target_colors,
+                        initial_translation, sampled_rotation, initial_scale,
+                        xyz_weight, color_weight,
+                        forward_weight, backward_weight, rot_reg_weight,
+                        learning_rate, num_iterations,
+                        fix_rotation,
+                        verbose
+                    )
+                    
+                    # Keep track of best result
+                    if final_loss < best_final_loss:
+                        best_final_loss = final_loss
+                        best_final_translation = final_translation
+                        best_final_rotation = final_rotation
+                        best_final_scale = final_scale
+                        if verbose:
+                            print(f"  → New best loss: {best_final_loss:.6f}")
+                
+                # Use the best result
+                final_translation = best_final_translation
+                final_rotation = best_final_rotation
+                final_scale = best_final_scale
+                final_loss = best_final_loss
+                
+                if verbose:
+                    print(f"\n  Multi-start optimization complete. Best loss: {final_loss:.6f}")
+            else:
+                # Use provided initial rotation (single optimization)
+                final_translation, final_rotation, final_scale, final_loss = self.optimize_pose(
+                    source_points, target_points,
+                    source_normals, target_normals,
+                    source_colors, target_colors,
+                    initial_translation, initial_rotation, initial_scale,
+                    xyz_weight, color_weight,
+                    forward_weight, backward_weight, rot_reg_weight,
+                    learning_rate, num_iterations,
+                    fix_rotation,
+                    verbose
+                )
             
             # Convert back to numpy and construct transformation matrix
             translation_np = final_translation.cpu().numpy()

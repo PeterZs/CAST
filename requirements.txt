@@ -20,10 +20,6 @@ roma
 replicate>=0.15.0
 openai>=1.0.0
 
-# MoGe depth estimation
-# Note: Install MoGe following https://github.com/microsoft/MoGe
-# pip install git+https://github.com/microsoft/MoGe.git
-
 # Utilities
 python-dotenv>=1.0.0
 tqdm>=4.64.0
@@ -43,3 +39,8 @@ pyglet==1.5.31
 fake-bpy-module
 aiohttp
 ipdb 
+
+# depth estimation
+git+https://github.com/microsoft/MoGe.git
+# clip 
+git+https://github.com/openai/CLIP.git

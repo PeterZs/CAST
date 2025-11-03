@@ -21,7 +21,19 @@ from .pose_optimizer import create_pose_optimizer
 class PoseEstimationModule:
     """Module for 6D pose estimation using ICP registration"""
     
-    def __init__(self, backend: Literal["icp", "pytorch"] = "pytorch", enable_render_and_compare: bool = False, debug: bool = False):
+    def __init__(self, backend: Literal["icp", "pytorch"] = "pytorch", 
+                 enable_render_and_compare: bool = False, 
+                 render_compare_backend: str = "clip",
+                 debug: bool = False):
+        """
+        Initialize pose estimation module
+        
+        Args:
+            backend: Pose estimation backend ("icp" or "pytorch")
+            enable_render_and_compare: Whether to enable render-and-compare for rotation estimation
+            render_compare_backend: Backend for render-and-compare ("qwen", "clip", or "orient_anything")
+            debug: Whether to enable debug mode
+        """
         self.icp_threshold = config.processing.icp_fitness_threshold
         self.max_iterations = config.processing.icp_max_iterations
         self.tolerance = config.processing.icp_tolerance
@@ -29,7 +41,7 @@ class PoseEstimationModule:
         self.enable_render_and_compare = enable_render_and_compare
         
         # Initialize render-and-compare module
-        self.render_compare = RenderCompareModule()
+        self.render_compare = RenderCompareModule(backend=render_compare_backend)
         self.debug = debug
     
     def _check_existing_pose(self, detected_object: DetectedObject, 
@@ -608,7 +620,9 @@ class PoseEstimationModule:
                            scene_colors: Optional[np.ndarray] = None,
                            use_colors: bool = True, xyz_weight: float = 1.0, color_weight: float = 0.1,
                            forward_weight: float = 1.0, backward_weight: float = 1.0, rot_reg_weight: float = 0.05, 
-                           learning_rate: float = 0.01, num_iterations: int = 1000) -> Tuple[np.ndarray, float, bool]:
+                           learning_rate: float = 0.01, num_iterations: int = 1000,
+                           initial_rotation: Optional[np.ndarray] = None,
+                           fix_rotation: bool = False) -> Tuple[np.ndarray, float, bool]:
         """
         Perform PyTorch-based pose optimization using chamfer distance
         
@@ -624,8 +638,11 @@ class PoseEstimationModule:
             color_weight: Weight for RGB color component
             forward_weight: Weight for forward direction (source to target)
             backward_weight: Weight for backward direction (target to source)
+            rot_reg_weight: Weight for rotation regularization loss
             learning_rate: Learning rate for optimization
             num_iterations: Number of optimization iterations
+            initial_rotation: Initial rotation matrix (3x3) from render-and-compare (optional)
+            fix_rotation: If True, keep rotation fixed during optimization
             
         Returns:
             Tuple of (transformation_matrix, final_loss, success)
@@ -635,9 +652,17 @@ class PoseEstimationModule:
             return np.eye(4), float('inf'), False
         
         print(f"Starting PyTorch-based registration with {len(mesh_points)} mesh points and {len(scene_points)} scene points")
+        if fix_rotation and initial_rotation is not None:
+            print("  Rotation is fixed (from render-and-compare). Optimizing only scale + translation.")
         
         # Initialize PyTorch optimizer
         optimizer = create_pose_optimizer()
+        
+        # Prepare initial transformation if rotation is provided
+        initial_transform = None
+        if initial_rotation is not None:
+            initial_transform = np.eye(4)
+            initial_transform[:3, :3] = initial_rotation
         
         # Perform PyTorch-based registration
         print("  Running PyTorch pose optimization...")
@@ -648,7 +673,9 @@ class PoseEstimationModule:
             use_colors, xyz_weight, color_weight,
             forward_weight, backward_weight, rot_reg_weight, 
             learning_rate, num_iterations,
-            initial_transform=None, verbose=True
+            initial_transform=initial_transform,
+            fix_rotation=fix_rotation,
+            verbose=True
         )
         
         print(f"  PyTorch registration complete. Final loss: {final_loss:.6f}")
@@ -730,7 +757,8 @@ class PoseEstimationModule:
                                    use_colors: bool = True, use_normals: bool = True, xyz_weight: float = 1.0, color_weight: float = 0.1,
                                    forward_weight: float = 1.0, backward_weight: float = 1.0, rot_reg_weight: float = 0.05,
                                    learning_rate: float = 0.01, num_iterations: int = 1000,
-                                   output_dir: Optional[Path] = None) -> MeshPose:
+                                   output_dir: Optional[Path] = None,
+                                   use_render_compare_rotation: bool = False) -> MeshPose:
         """
         Estimate 6D pose of an object using PyTorch-based optimization with chamfer distance
         
@@ -740,13 +768,17 @@ class PoseEstimationModule:
             depth_estimation: Scene depth estimation
             image: Original RGB image for instance point cloud extraction
             use_colors: Whether to include RGB colors in distance calculation
+            use_normals: Whether to include normals in distance calculation
             xyz_weight: Weight for XYZ distance component
             color_weight: Weight for RGB color component
             forward_weight: Weight for forward direction (source to target)
             backward_weight: Weight for backward direction (target to source)
+            rot_reg_weight: Weight for rotation regularization loss
             learning_rate: Learning rate for optimization
             num_iterations: Number of optimization iterations
             output_dir: Output directory for render-and-compare results (fallback)
+            use_render_compare_rotation: If True, use render-and-compare to initialize rotation
+                                          and optimize only scale + translation
             
         Returns:
             Estimated 6D pose
@@ -765,13 +797,22 @@ class PoseEstimationModule:
         scene_points, scene_normals, scene_colors = self.extract_object_point_cloud_from_instance(
             depth_estimation, image, detected_object, extract_colors=use_colors
         )
-        # downsample in  the torch-based optimization
-        # downsample_factor = 2 
-        # scene_points, scene_normals, scene_colors = scene_points[::downsample_factor], scene_normals[::downsample_factor], scene_colors[::downsample_factor]
         
         if len(scene_points) == 0:
             print(f"Failed to extract scene points for object {detected_object.id}")
             return MeshPose(translation=np.zeros(3), rotation=np.eye(3), scale=np.ones(3), confidence=0.0)
+        
+        # Step 2.5: Optionally use render-and-compare to initialize rotation
+        initial_rotation = None
+        if use_render_compare_rotation:
+            print(f"Using render-and-compare to initialize rotation for object {detected_object.id}...")
+            if output_dir is None:
+                print("Warning: output_dir is None, cannot use render-and-compare")
+            else:
+                initial_rotation = self.render_compare.estimate_rotation_render_compare(
+                    mesh, detected_object, output_dir
+                )
+                print("Render-and-compare provided initial rotation. Will optimize only scale + translation.")
         
         # Step 3: Perform PyTorch-based registration
         transformation, final_loss, success = self.pytorch_registration(
@@ -779,7 +820,9 @@ class PoseEstimationModule:
             scene_points, scene_normals if use_normals else None, scene_colors,
             use_colors, xyz_weight, color_weight,
             forward_weight, backward_weight, rot_reg_weight,
-            learning_rate, num_iterations
+            learning_rate, num_iterations,
+            initial_rotation=initial_rotation,
+            fix_rotation=(initial_rotation is not None)
         )
         if self.debug:
             self._vis_pcd(mesh_points, scene_points, transformation)
@@ -810,11 +853,12 @@ class PoseEstimationModule:
                    use_normals: bool = False,
                    xyz_weight: float = 1.0,
                    color_weight: float = 0.1,
-                   forward_weight: float = 1.0,
-                   backward_weight: float = 1.0,
-                   rot_reg_weight: float = 0.05, 
+                   forward_weight: float = 0.8,
+                   backward_weight: float = 1.2,
+                   rot_reg_weight: float = 0.1,  # seems that the weight of 0.5 is too large  
                    learning_rate: float = 0.02,
-                   num_iterations: int = 3500) -> List[Object3D]:
+                   num_iterations: int = 3000,
+                   use_render_compare_rotation: bool = True) -> List[Object3D]:
         """
         Run PyTorch-based pose estimation for all objects
         
@@ -826,14 +870,17 @@ class PoseEstimationModule:
             filter_low_fitness: Whether to filter out objects with low fitness scores
             min_fitness_threshold: Minimum fitness threshold for filtering
             image: Original RGB image for instance point cloud extraction
-            method: Method to use for pose estimation, either "icp" or "pytorch"
             use_colors: Whether to include RGB colors in distance calculation
+            use_normals: Whether to include normals in distance calculation
             xyz_weight: Weight for XYZ distance component
             color_weight: Weight for RGB color component
             forward_weight: Weight for forward direction (source to target)
             backward_weight: Weight for backward direction (target to source)
+            rot_reg_weight: Weight for rotation regularization loss
             learning_rate: Learning rate for optimization
             num_iterations: Number of optimization iterations
+            use_render_compare_rotation: If True, use render-and-compare to initialize rotation
+                                          and optimize only scale + translation
             
         Returns:
             List of 3D objects with estimated poses
@@ -865,7 +912,8 @@ class PoseEstimationModule:
                     mesh, detected_obj, depth_estimation, image,
                     use_colors, use_normals, xyz_weight, color_weight,
                     forward_weight, backward_weight, ROT_REG_WEIGHTS[i] if i < len(ROT_REG_WEIGHTS) else rot_reg_weight,
-                    learning_rate, num_iterations, output_dir
+                    learning_rate, num_iterations, output_dir,
+                    use_render_compare_rotation
                 )
             
             # Check fitness threshold if filtering is enabled

@@ -1,3 +1,6 @@
 [submodule "thirdparty/Grounded-Segment-Anything"]
 	path = thirdparty/Grounded-Segment-Anything
 	url = https://github.com/IDEA-Research/Grounded-Segment-Anything
+[submodule "thirdparty/Orient-Anything"]
+	path = thirdparty/Orient-Anything
+	url = https://github.com/SpatialVision/Orient-Anything

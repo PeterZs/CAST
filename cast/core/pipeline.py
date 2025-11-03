@@ -41,6 +41,7 @@ class CASTPipeline:
                  max_generation_retries: int = 3,
                  pose_estimation_backend: Literal["icp", "pytorch"] = "icp",
                  enable_render_and_compare: bool = False,
+                 render_compare_backend: str = "clip",
                  enable_scene_graph_opt: bool = False, 
                  debug: bool = False):
         """
@@ -49,10 +50,12 @@ class CASTPipeline:
         Args:
             output_dir: Directory to save all outputs
             mesh_provider: 3D mesh generation provider ("tripo3d" or "trellis")
+            mesh_base_url: Base URL for mesh generation service (optional)
             generation_provider: Image generation provider ("replicate" or "qwen")
             max_generation_retries: Maximum number of generation attempts with quality assessment (default: 3)
             pose_estimation_backend: Backend for pose estimation ("icp" or "pytorch")
             enable_render_and_compare: Whether to enable render-and-compare for pose estimation
+            render_compare_backend: Backend for render-and-compare ("qwen", "clip", or "orient_anything")
             enable_scene_graph_opt: Whether to enable scene graph optimization
             debug: Whether to enable debug mode
         """
@@ -65,7 +68,12 @@ class CASTPipeline:
         self.generation_module = ImageGenerationModule(provider=generation_provider, max_generation_retries=max_generation_retries)
         self.depth_module = DepthEstimationModule()
         self.mesh_module = MeshGenerationModule(provider=mesh_provider, base_url=mesh_base_url)
-        self.pose_module = PoseEstimationModule(backend=pose_estimation_backend,  enable_render_and_compare=enable_render_and_compare, debug=debug)
+        self.pose_module = PoseEstimationModule(
+            backend=pose_estimation_backend,
+            enable_render_and_compare=enable_render_and_compare,
+            render_compare_backend=render_compare_backend,
+            debug=debug
+        )
         self.scene_graph_module = SceneGraphOptimizationModule() if enable_scene_graph_opt else None
         self.debug = debug
         
@@ -618,7 +626,6 @@ class CASTPipeline:
             enable_generation: Whether to enable Kontext generation for occluded objects
             generation_threshold: Minimum occlusion level to trigger generation
             discard_threshold: Minimum occlusion level to discard objects
-            enable_render_and_compare: Whether to enable render-and-compare for pose estimation
             **pipeline_kwargs: Additional pipeline parameters
             
         Returns:
@@ -665,6 +672,8 @@ def create_pipeline(output_dir: Optional[str] = None,
                    generation_provider: Literal["replicate", "qwen"] = "replicate",
                    max_generation_retries: int = 3,
                    pose_estimation_backend: Literal["icp", "pytorch"] = "icp",
+                   enable_render_and_compare: bool = False,
+                   render_compare_backend: str = "orient_anything",
                    debug: bool = False) -> CASTPipeline:
     """
     Factory function to create a CAST pipeline
@@ -672,22 +681,29 @@ def create_pipeline(output_dir: Optional[str] = None,
     Args:
         output_dir: Output directory path
         mesh_provider: 3D mesh generation provider ("tripo3d" or "trellis")
+        mesh_base_url: Base URL for mesh generation service (optional)
         generation_provider: Image generation provider ("replicate" or "qwen")
         max_generation_retries: Maximum number of generation attempts with quality assessment (default: 3)
         pose_estimation_backend: Backend for pose estimation ("icp" or "pytorch")
+        enable_render_and_compare: Whether to enable render-and-compare for pose estimation
+        render_compare_backend: Backend for render-and-compare ("qwen", "clip", or "orient_anything")
         debug: Whether to enable debug mode
         
     Returns:
         Initialized CAST pipeline
     """
     output_path = Path(output_dir) if output_dir else None
-    pipeline = CASTPipeline(output_dir=output_path, 
-                           mesh_provider=mesh_provider,
-                           mesh_base_url=mesh_base_url,
-                           generation_provider=generation_provider,
-                           max_generation_retries=max_generation_retries,
-                           pose_estimation_backend=pose_estimation_backend,
-                           debug=debug)
+    pipeline = CASTPipeline(
+        output_dir=output_path, 
+        mesh_provider=mesh_provider,
+        mesh_base_url=mesh_base_url,
+        generation_provider=generation_provider,
+        max_generation_retries=max_generation_retries,
+        pose_estimation_backend=pose_estimation_backend,
+        enable_render_and_compare=enable_render_and_compare,
+        render_compare_backend=render_compare_backend,
+        debug=debug
+    )
     
     # Validate setup
     if not pipeline.validate_setup():

@@ -13,8 +13,6 @@ import matplotlib.pyplot as plt
 import open3d as o3d
 
 from ..core.common import DepthEstimation
-from ..utils.image_utils import normalize_image, save_image
-from ..config.settings import config
 
 class DepthEstimationModule:
     """Module for depth estimation using MoGe"""
@@ -485,18 +483,3 @@ class DepthEstimationModule:
         
         return normalized
     
-    def visualize_point_cloud(self, depth_estimation: DepthEstimation, 
-                            image: np.ndarray) -> None:
-        """Visualize point cloud using Open3D"""
-        try:
-            pcd = self.create_point_cloud_o3d(depth_estimation, image)
-            
-            # Remove outliers
-            pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-            
-            # Visualize
-            print("Visualizing point cloud... Close the window to continue.")
-            o3d.visualization.draw_geometries([pcd])
-            
-        except Exception as e:
-            print(f"Error visualizing point cloud: {e}")

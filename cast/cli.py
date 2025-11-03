@@ -147,6 +147,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--render-and-compare", 
+        action='store_true', 
+        help="Enable render-and-compare for pose estimation"
+    )
+
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Debug mode"
@@ -161,6 +167,7 @@ Examples:
                                   generation_provider=args.generation_provider,
                                   mesh_base_url=args.mesh_base_url,
                                   pose_estimation_backend=args.pose_estimation_backend,
+                                  enable_render_and_compare=args.render_and_compare,
                                   debug=args.debug)
     except Exception as e:
         print(f"Error creating pipeline: {e}")

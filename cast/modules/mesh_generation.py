@@ -17,6 +17,14 @@ from ..core.common import DetectedObject, Mesh3D, DepthEstimation
 from ..utils.api_clients import Tripo3DClient, TrellisClient, Hunyuan3DClient, Hunyuan3DPaintClient
 from ..utils.image_utils import save_image
 
+TRIPO_3D_TRANSFORM = np.array([
+    [0., 0., -1., 0.], 
+    [0., 1., 0., 0.], 
+    [1., 0., 0., 0.], 
+    [0., 0., 0., 1.]
+])
+
+
 def save_ply_points(filename: str, points: np.ndarray) -> None:
     """
     Save 3D points to a PLY format file.
@@ -175,6 +183,10 @@ class MeshGenerationModule:
 
                 # Download mesh file
                 if self.tripo_client.download_model(model_url, mesh_path):
+                    # Apply a predefined rotation to convert into OpenGL convention 
+                    mesh = trimesh.load(mesh_path)
+                    mesh.apply_transform(TRIPO_3D_TRANSFORM)
+                    mesh.export(mesh_path)
                     # Load mesh using trimesh
                     mesh_3d = self._load_mesh_from_file(mesh_path)
                     if mesh_3d:
