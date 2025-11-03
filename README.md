@@ -39,7 +39,7 @@ Detailed differences are summarized in the following table:
 ### Quick Start 
 #### 0. System Requirements 
 * OS: Windows / Ubuntu22.04 / CentOS8 Tested
-* VRAM: GPU with 12GB VRAM or MORE (required for grounded-sam and DR-ICP)
+* VRAM: GPU with **12GB VRAM or More** (required for grounded-sam)
 
 #### 1. Setup 
 ``` shell 
@@ -80,6 +80,9 @@ python -m cast.cli -h
 
 # inference example
 python -m cast.cli -i assets/inputs/doll2.png --output outputs --enable-generation --pose-estimation-backend pytorch --generation-provider qwen --mesh-provider trellis
+# or using render-and-compare to get the rotation
+# also turn-on the debug mode to view registration results 
+python -m cast.cli -i assets/inputs/car2.png --output output --enable-generation --pose-estimation-backend pytorch --generation-provider qwen --mesh-provider trellis --render-and-compare --debug
 ```
 
 
